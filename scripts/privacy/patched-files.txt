@@ -3,7 +3,6 @@
 .github/workflows/privacy-nightly.yml
 apps/server/src/telemetry/AnalyticsService.test.ts
 apps/server/src/telemetry/AnalyticsService.ts
-apps/server/src/telemetry/Identify.ts
 apps/server/src/telemetry/Privacy.test.ts
 scripts/privacy/README.md
 scripts/privacy/egress-guard.sh

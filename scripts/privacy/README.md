@@ -22,9 +22,9 @@ Then `t3 update <version>` installs the fork build. To roll back, run
   returns false, `flush` and `recordOwners` do nothing, and no HTTP client is
   used. The PostHog key and the ingest host have no defaults. Upstream's sender
   stays as `layerSender` for its own tests.
-- `apps/server/src/telemetry/Identify.ts`: `getTelemetryIdentity` uses only the
-  local random install id. `getServerOwners` returns no owners. Neither reads
-  `~/.codex/auth.json` or `~/.claude.json`.
+- `apps/server/src/telemetry/Identify.ts`: no change since upstream #42299
+  (24 Nov 2026) stopped reading `~/.codex/auth.json` and `~/.claude.json`.
+  `Privacy.test.ts` still proves it reads no provider file.
 - `apps/server/src/telemetry/AnalyticsService.test.ts`: the sender tests use
   `layerSender`.
 - `apps/server/src/telemetry/Privacy.test.ts`: proves the shipped layer sends no
