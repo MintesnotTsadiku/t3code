@@ -294,9 +294,11 @@ export const getTelemetryIdentityForHome = Effect.fn("getTelemetryIdentityForHom
   };
 });
 
-export const getTelemetryIdentity = Effect.flatMap(
-  HostProcess.HomeDirectory,
-  getTelemetryIdentityForHome,
+/** Privacy fork: only the local random install id; provider login files are never read. */
+export const getTelemetryIdentity = upsertAnonymousId.pipe(
+  Effect.map(hashTelemetryId),
+  Effect.catch((error) => logTelemetryIdentityError(error).pipe(Effect.as(null))),
+  Effect.map((installId) => ({ distinctId: installId, installId })),
 );
 
 /**
@@ -338,4 +340,5 @@ export const getServerOwnersForHome = Effect.fn("getServerOwnersForHome")(functi
   );
 });
 
-export const getServerOwners = Effect.flatMap(HostProcess.HomeDirectory, getServerOwnersForHome);
+/** Privacy fork: the server reports no owners and reads no account files. */
+export const getServerOwners = Effect.succeed<ReadonlyArray<TelemetryOwner>>([]);
