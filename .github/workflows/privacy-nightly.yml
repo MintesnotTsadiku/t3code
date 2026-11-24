@@ -176,7 +176,8 @@ jobs:
           install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
 
       - name: Run telemetry tests
-        run: vp test run apps/server/src/telemetry/
+        working-directory: apps/server
+        run: vp test run src/telemetry/
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "$VERSION"

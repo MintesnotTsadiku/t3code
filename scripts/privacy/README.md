@@ -55,7 +55,7 @@ and publishes nothing. To fix it:
 1. Fetch the upstream tag and merge it into `privacy`. Do not rebase or
    force-push.
 2. Resolve the conflict and keep the patch as small as before.
-3. Run `vp test run apps/server/src/telemetry/`.
+3. Run `vp test run src/telemetry/` in `apps/server`.
 4. Push `privacy`, run the workflow for the version, and close the issue.
 
 After the merge, disable any new upstream workflow in the fork's Actions
