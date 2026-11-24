@@ -59,7 +59,7 @@ and publishes nothing. To fix it:
 4. Push `privacy`, run the workflow for the version, and close the issue.
 
 After the merge, disable any new upstream workflow in the fork's Actions
-settings. Only `Privacy nightly` should run here.
+settings. Only `Privacy nightly` and `Upstream archive` should run here.
 
 ## Egress guard
 
@@ -69,3 +69,12 @@ hosts and tokens. It prints the matching files and exits 1 when it finds one.
 Key matches print only the file name. Host matches that were reviewed and are
 not telemetry, such as a domain list in a provider SDK, go in
 `scripts/privacy/egress-allow.txt` as narrow fixed strings.
+
+## Upstream archive
+
+`.github/workflows/upstream-archive.yml` runs daily. For each upstream stable
+release that this fork has no `upstream-v<version>` release for yet, it copies
+every asset (desktop installers, CLI archives, `SHA256SUMS`) unchanged into a
+prerelease here. These are upstream's builds, telemetry included. They exist
+only so the installers survive if upstream deletes them or goes private.
+Machines install fork builds (`v<version>`), never `upstream-v<version>`.

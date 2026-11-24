@@ -1,6 +1,7 @@
 # Files the privacy fork may change relative to upstream.
 # The nightly workflow fails when the merged tree differs from upstream elsewhere.
 .github/workflows/privacy-nightly.yml
+.github/workflows/upstream-archive.yml
 apps/server/src/telemetry/AnalyticsService.test.ts
 apps/server/src/telemetry/AnalyticsService.ts
 apps/server/src/telemetry/Privacy.test.ts

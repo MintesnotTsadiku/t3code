@@ -1,0 +1,67 @@
+# Upstream archive: keep a copy of every upstream stable release in this fork.
+#
+# For each upstream stable release (not nightlies) that this fork has no
+# `upstream-v<version>` release for yet, download all its assets (desktop
+# installers, CLI archives, SHA256SUMS) and publish them here unchanged.
+# These are upstream's own builds, telemetry included: they are kept only in case
+# upstream disappears. Machines install fork builds (`v<version>`), never these.
+# See scripts/privacy/README.md.
+name: Upstream archive
+
+on:
+  schedule:
+    - cron: "15 5 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream stable version to archive, for example 0.1.11. Empty archives every missing stable release (newest 10).
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-archive
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: pingdotgg/t3code
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  archive:
+    name: Copy upstream stable releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Archive missing releases
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED" ]; then
+            tags="v$REQUESTED"
+          else
+            tags=$(gh api "repos/$UPSTREAM_REPO/releases?per_page=100" \
+              --jq '[.[] | select(.prerelease == false and .draft == false)][:10][].tag_name')
+          fi
+          for tag in $tags; do
+            mine="upstream-$tag"
+            if gh release view "$mine" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "$mine already archived"; continue
+            fi
+            dir="$RUNNER_TEMP/$tag"; rm -rf "$dir"; mkdir -p "$dir"
+            gh release download "$tag" --repo "$UPSTREAM_REPO" --dir "$dir"
+            if [ -f "$dir/SHA256SUMS" ]; then
+              (cd "$dir" && sha256sum --check --ignore-missing SHA256SUMS)
+            fi
+            src=$(gh api "repos/$UPSTREAM_REPO/releases/tags/$tag" --jq '.target_commitish')
+            sha=$(gh api "repos/$UPSTREAM_REPO/commits/$tag" --jq .sha)
+            notes="Unchanged copy of upstream release $tag (https://github.com/$UPSTREAM_REPO/releases/tag/$tag), upstream commit $sha, branch $src.
+          These are upstream's builds with upstream telemetry. Kept as an archive only; install fork builds (v<version>) instead."
+            gh release create "$mine" "$dir"/* --repo "$GITHUB_REPOSITORY" --target main \
+              --title "Upstream $tag (archive)" --notes "$notes" --prerelease --latest=false
+            rm -rf "$dir"
+            echo "$mine archived"
+          done
