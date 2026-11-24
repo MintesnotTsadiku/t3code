@@ -1,0 +1,312 @@
+# Privacy fork nightly: rebuild the newest upstream nightly with the privacy patch.
+#
+# The `privacy` branch is upstream plus a few patch commits. Each run checks out
+# an upstream nightly tag, merges `privacy` into it, runs the telemetry tests,
+# builds only the Linux x64 runtime archive with the exact upstream version, runs
+# the egress guard, and publishes `v<version>` in this fork as a prerelease.
+# A merge conflict opens an issue in this fork and publishes nothing.
+# See scripts/privacy/README.md.
+name: Privacy nightly
+
+on:
+  schedule:
+    # Upstream publishes nightlies about every 6.5 hours; one usually lands
+    # between 09:45 and 12:30 UTC.
+    - cron: "40 13 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream nightly version, for example 0.1.12-nightly.20261124.5191. Empty picks the newest.
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: privacy-nightly
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: pingdotgg/t3code
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  sync_main:
+    name: Sync main to upstream
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      # GitHub refuses this when upstream changed workflow files, because
+      # GITHUB_TOKEN cannot write workflows. The release does not depend on main.
+      - name: Fast-forward main
+        run: gh api -X POST "repos/$GITHUB_REPOSITORY/merge-upstream" -f branch=main
+
+  resolve:
+    name: Pick upstream nightly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      upstream_sha: ${{ steps.pick.outputs.upstream_sha }}
+      previous: ${{ steps.pick.outputs.previous }}
+    steps:
+      - id: pick
+        name: Pick version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${REQUESTED:-}" ]]; then
+            version="${REQUESTED#v}"
+          else
+            version="$(gh api "repos/$UPSTREAM_REPO/releases?per_page=30" \
+              --jq '[.[] | select(.draft | not) | select(.tag_name | test("^v[0-9.]+-nightly\\.[0-9]{8}\\.[0-9]+$"))]
+                    | sort_by(.published_at) | last | .tag_name' | sed 's/^v//')"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
+            echo "::error::Not an upstream nightly version: '$version'"
+            exit 1
+          fi
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Fork release v$version already exists; nothing to do."
+            echo "version=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          upstream_sha="$(gh api "repos/$UPSTREAM_REPO/commits/v$version" --jq .sha)"
+          previous="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" \
+            --jq '[.[] | select(.draft | not)] | sort_by(.created_at) | last | .tag_name // ""')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "Building v$version from $UPSTREAM_REPO@$upstream_sha (previous fork release: ${previous:-none})"
+
+  build:
+    name: Build linux-x64
+    needs: resolve
+    if: needs.resolve.outputs.version != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      UPSTREAM_SHA: ${{ needs.resolve.outputs.upstream_sha }}
+      PREVIOUS: ${{ needs.resolve.outputs.previous }}
+      PRIVACY_SHA: ${{ github.sha }}
+    steps:
+      # Blobless upstream history keeps the fetch small; blobs come on demand.
+      # .repos/ holds vendored references the build never reads.
+      - name: Check out upstream tag
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add upstream "https://github.com/$UPSTREAM_REPO.git"
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git config remote.upstream.promisor true
+          git config remote.upstream.partialclonefilter blob:none
+          git fetch -q --no-tags --filter=blob:none upstream "refs/tags/v$VERSION"
+          git fetch -q --no-tags origin "$PRIVACY_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach "$UPSTREAM_SHA"
+          git config user.name "t3code-privacy-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge privacy patch
+        id: merge
+        run: |
+          set -euo pipefail
+          if git merge --no-ff --no-edit -m "Privacy patch on v$VERSION" "$PRIVACY_SHA" > "$RUNNER_TEMP/merge.log" 2>&1; then
+            cat "$RUNNER_TEMP/merge.log"
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/merge.log"
+          git diff --name-only --diff-filter=U | sort > "$RUNNER_TEMP/conflicts.txt"
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+          echo "::error::Privacy patch conflicts with v$VERSION:"
+          cat "$RUNNER_TEMP/conflicts.txt"
+          exit 1
+
+      - name: Open conflict issue
+        if: failure() && steps.merge.outputs.merged == 'false'
+        run: |
+          set -euo pipefail
+          files="$(paste -sd ',' "$RUNNER_TEMP/conflicts.txt" | sed 's/,/, /g')"
+          title="Privacy patch conflict: v$VERSION ($files)"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"Privacy patch conflict: v$VERSION\"" --json number --jq '.[0].number // ""')"
+          if [[ -n "$existing" ]]; then
+            echo "Issue #$existing already reports this conflict."
+            exit 0
+          fi
+          {
+            echo "The privacy patch does not merge into upstream \`v$VERSION\` ($UPSTREAM_REPO@$UPSTREAM_SHA). No release was published."
+            echo
+            echo "Conflicting files:"
+            sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt"
+            echo
+            echo "Fix: merge the upstream tag into \`privacy\` locally, resolve, run the telemetry tests, push, then run this workflow again."
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/issue.md"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+
+      # The merged tree may differ from upstream only in the files the patch owns.
+      # This stops a privacy branch that picked up newer upstream code from
+      # shipping it under an older version string.
+      - name: Check patch scope
+        run: |
+          set -euo pipefail
+          git diff --name-only "$UPSTREAM_SHA" HEAD | sort > "$RUNNER_TEMP/changed.txt"
+          grep -v '^#' scripts/privacy/patched-files.txt | sed '/^$/d' | sort > "$RUNNER_TEMP/allowed.txt"
+          extra="$(comm -23 "$RUNNER_TEMP/changed.txt" "$RUNNER_TEMP/allowed.txt")"
+          echo "Files changed from upstream:"
+          cat "$RUNNER_TEMP/changed.txt"
+          if [[ -n "$extra" ]]; then
+            echo "::error::Files outside scripts/privacy/patched-files.txt differ from upstream:"
+            echo "$extra"
+            exit 1
+          fi
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Run telemetry tests
+        run: vp test run apps/server/src/telemetry/
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      # Public T3 Connect identifiers, the same ones upstream bakes into its
+      # release builds (see .env.example). No tracing values are set, so the
+      # build has no relay trace endpoint or token.
+      - name: Load public T3 Connect config
+        run: |
+          set -euo pipefail
+          for name in CLERK_PUBLISHABLE_KEY CLERK_JWT_TEMPLATE CLERK_CLI_OAUTH_CLIENT_ID RELAY_URL; do
+            value="$(sed -n "s|^T3CODE_$name=||p" .env.example | head -n 1)"
+            if [[ -z "$value" ]]; then
+              echo "::error::.env.example has no T3CODE_$name"
+              exit 1
+            fi
+            echo "T3CODE_$name=$value" >> "$GITHUB_ENV"
+          done
+
+      - name: Build server and web bundle
+        env:
+          T3CODE_TELEMETRY_CHANNEL: nightly
+          T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: ""
+          T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: ""
+          T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: ""
+          VITE_RELAY_OTLP_TRACES_URL: ""
+          VITE_RELAY_OTLP_TRACES_DATASET: ""
+          VITE_RELAY_OTLP_TRACES_TOKEN: ""
+        run: vp run --filter t3 build
+
+      - name: Apply web client branding
+        run: node scripts/apply-web-brand-assets.ts nightly apps/server/dist/client
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build resource monitor
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+
+      - name: Build CLI single-executable
+        env:
+          T3CODE_TELEMETRY_CHANNEL: nightly
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Stage resource monitor
+        run: |
+          set -euo pipefail
+          target_dir="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          mkdir -p "$target_dir"
+          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$target_dir/"
+
+      - name: Install patchelf
+        run: command -v patchelf || { sudo apt-get update && sudo apt-get install -y patchelf; }
+
+      - name: Build CLI archive
+        run: |
+          node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch x64 \
+            --version "$VERSION" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive "release-cli/t3-$VERSION-linux-x64.tar.gz" --expect-version "$VERSION"
+
+      - name: Egress guard
+        run: |
+          set -o pipefail
+          bash scripts/privacy/egress-guard.sh "release-cli/t3-$VERSION-linux-x64.tar.gz" | tee "$RUNNER_TEMP/egress-guard.txt"
+
+      # Informational: the archive should hold the same files as upstream's.
+      - name: Compare file list with upstream archive
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          name="t3-$VERSION-linux-x64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/upstream.tar.gz" \
+            "https://github.com/$UPSTREAM_REPO/releases/download/v$VERSION/$name"
+          tar -tzf "$RUNNER_TEMP/upstream.tar.gz" | sort > "$RUNNER_TEMP/upstream-files.txt"
+          tar -tzf "release-cli/$name" | sort > "$RUNNER_TEMP/fork-files.txt"
+          echo "upstream files: $(wc -l < "$RUNNER_TEMP/upstream-files.txt"), fork files: $(wc -l < "$RUNNER_TEMP/fork-files.txt")"
+          if diff "$RUNNER_TEMP/upstream-files.txt" "$RUNNER_TEMP/fork-files.txt" > "$RUNNER_TEMP/files.diff"; then
+            echo "same file list as upstream" | tee "$RUNNER_TEMP/files-summary.txt"
+          else
+            echo "file list differs from upstream ($(grep -c '^[<>]' "$RUNNER_TEMP/files.diff") lines)" | tee "$RUNNER_TEMP/files-summary.txt"
+            head -n 100 "$RUNNER_TEMP/files.diff"
+          fi
+          bash scripts/privacy/egress-guard.sh "$RUNNER_TEMP/upstream.tar.gz" | tail -n 20 || true
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd release-cli
+          sha256sum "t3-$VERSION-linux-x64.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          compare="none (first fork release)"
+          if [[ -n "${PREVIOUS:-}" ]]; then
+            compare="https://github.com/$UPSTREAM_REPO/compare/$PREVIOUS...v$VERSION"
+          fi
+          {
+            echo "Upstream nightly \`v$VERSION\` rebuilt with the privacy patch. Linux x64 only."
+            echo
+            echo "- Upstream tag: https://github.com/$UPSTREAM_REPO/releases/tag/v$VERSION"
+            echo "- Upstream commit: $UPSTREAM_REPO@$UPSTREAM_SHA"
+            echo "- Privacy patch commit: $GITHUB_REPOSITORY@$PRIVACY_SHA"
+            echo "- Upstream changes since the previous fork release: $compare"
+            echo "- Build run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- File list against upstream archive: $(cat "$RUNNER_TEMP/files-summary.txt" 2>/dev/null || echo 'not compared')"
+            echo
+            echo "Egress guard:"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/egress-guard.txt"
+            echo '```'
+            echo
+            echo "Install: \`T3CODE_RELEASE_BASE_URL=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download t3 update $VERSION\`"
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$PRIVACY_SHA" \
+            --prerelease \
+            --title "v$VERSION (privacy)" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "release-cli/t3-$VERSION-linux-x64.tar.gz" \
+            release-cli/SHA256SUMS
