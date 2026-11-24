@@ -15,7 +15,10 @@ fi
 
 target="$1"
 scratch=""
-cleanup() { if [[ -n "$scratch" ]]; then rm -rf "$scratch"; fi; }
+cleanup() {
+  if [[ -n "$scratch" ]]; then rm -rf "$scratch"; fi
+  if [[ -n "${allowed:-}" ]]; then rm -f "$allowed"; fi
+}
 trap cleanup EXIT
 
 if [[ -f "$target" ]]; then
@@ -39,6 +42,10 @@ patterns=(
   "key|Axiom personal token|xapt-[A-Za-z0-9-]{8,}"
 )
 
+# Fixed strings for host matches that were reviewed and are not telemetry.
+allowed="$(mktemp)"
+grep -v '^#' "$(dirname "$0")/egress-allow.txt" 2>/dev/null | sed '/^$/d' > "$allowed" || true
+
 file_count="$(find "$root" -type f | wc -l)"
 echo "egress-guard: scanning $file_count files under $(basename "$target")"
 
@@ -48,11 +55,15 @@ for entry in "${patterns[@]}"; do
   rest="${entry#*|}"
   name="${rest%%|*}"
   regex="${rest#*|}"
-  # -a: treat binaries as text. Hosts print the match; keys print only the file.
+  # -a: treat binaries as text. Keys print only the file. Hosts print the match
+  # with some context, minus the reviewed contexts in egress-allow.txt.
   if [[ "$kind" == "key" ]]; then
     matches="$(grep -ralE -- "$regex" "$root" 2>/dev/null | sed "s|^$root/||" | sort | head -n 20 || true)"
   else
-    matches="$(grep -raoE -- "$regex" "$root" 2>/dev/null | sed "s|^$root/||" | sort | uniq -c | head -n 20 || true)"
+    matches="$(grep -raoE -- ".{0,40}($regex).{0,40}" "$root" 2>/dev/null \
+      | LC_ALL=C tr -c '[:print:]\n' '?' \
+      | grep -vF -f "$allowed" \
+      | sed "s|^$root/||" | sort | uniq -c | head -n 20 || true)"
   fi
   if [[ -n "$matches" ]]; then
     found=1

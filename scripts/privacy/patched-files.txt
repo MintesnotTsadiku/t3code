@@ -8,3 +8,4 @@ apps/server/src/telemetry/Privacy.test.ts
 scripts/privacy/README.md
 scripts/privacy/egress-guard.sh
 scripts/privacy/patched-files.txt
+scripts/privacy/egress-allow.txt

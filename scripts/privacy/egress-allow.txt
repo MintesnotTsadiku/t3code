@@ -1,0 +1,5 @@
+# Reviewed host matches that are not telemetry. One fixed string per line; a
+# match whose context contains the string is ignored. Keep each entry narrow.
+#
+# @cursor/sdk: a list of MCP server domains for its network policy, not an endpoint.
+"plain.com","posthog.com","prisma.io"

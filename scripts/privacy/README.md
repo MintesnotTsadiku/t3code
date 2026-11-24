@@ -66,4 +66,6 @@ settings. Only `Privacy nightly` should run here.
 `scripts/privacy/egress-guard.sh <archive or dir>` scans every file in a built
 runtime, binaries too, for the T3 ingest host, PostHog keys and hosts, and Axiom
 hosts and tokens. It prints the matching files and exits 1 when it finds one.
-Key matches print only the file name.
+Key matches print only the file name. Host matches that were reviewed and are
+not telemetry, such as a domain list in a provider SDK, go in
+`scripts/privacy/egress-allow.txt` as narrow fixed strings.
