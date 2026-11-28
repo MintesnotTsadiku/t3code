@@ -86,15 +86,6 @@ import { refreshTheme, setAppearanceMode } from "~/hooks/useTheme";
 import { THEME_APPEARANCE_MODE_STORAGE_KEY } from "~/themePalette";
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import LargeTextViewer from "./LargeTextViewer";
-import type { ClientSettings } from "@t3tools/contracts";
-import {
-  __resetClientSettingsPersistenceForTests,
-  updateClientSettings,
-} from "~/hooks/useSettings";
-import { I18nProvider } from "~/i18n/I18nProvider";
-import { initializeI18n } from "~/i18n/initializeI18n";
-import { startI18n, whenLocaleReady } from "~/i18n/runtime";
-import { ensureLocalApi } from "~/localApi";
 import VirtualTablePreview from "./VirtualTablePreview";
 import { OfficeFilePreview } from "./OfficeFilePreview";
 import { MermaidFilePreview } from "./MermaidFilePreview";
