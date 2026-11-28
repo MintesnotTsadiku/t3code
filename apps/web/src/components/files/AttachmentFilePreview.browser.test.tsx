@@ -1,6 +1,6 @@
 import DocumentPages, { sanitizeDocumentHtml } from "./DocumentPages";
 import { act, fakeTimers, render, stubGlobal, type Screen } from "../../../test/render";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type ClientSettings } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
@@ -72,7 +72,16 @@ vi.mock(import("./office/WordDocument"), async () => {
   };
 });
 
-import { __setClientSettingsForTests, getClientSettings } from "~/hooks/useSettings";
+import {
+  __resetClientSettingsPersistenceForTests,
+  __setClientSettingsForTests,
+  getClientSettings,
+  updateClientSettings,
+} from "~/hooks/useSettings";
+import { I18nProvider } from "~/i18n/I18nProvider";
+import { initializeI18n } from "~/i18n/initializeI18n";
+import { startI18n, whenLocaleReady } from "~/i18n/runtime";
+import { ensureLocalApi } from "~/localApi";
 import { refreshTheme, setAppearanceMode } from "~/hooks/useTheme";
 import { THEME_APPEARANCE_MODE_STORAGE_KEY } from "~/themePalette";
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
@@ -692,6 +701,83 @@ describe("bounded binary previews", () => {
       } finally {
         URL.revokeObjectURL(invalid);
       }
+    }
+  });
+
+  it("formats archive and SQLite counts and dates in the app language, not the browser's", async () => {
+    const { persistence } = ensureLocalApi();
+    let savedSettings: ClientSettings | null = null;
+    using _readSettings = vi
+      .spyOn(persistence, "getClientSettings")
+      .mockImplementation(async () => savedSettings);
+    using _writeSettings = vi
+      .spyOn(persistence, "setClientSettings")
+      .mockImplementation(async (settings) => {
+        savedSettings = settings;
+      });
+    __resetClientSettingsPersistenceForTests();
+    const setLanguage = async (language: string) => {
+      await act(async () => {
+        await updateClientSettings({ language });
+        await whenLocaleReady();
+      });
+    };
+    const zip = new JSZip();
+    const date = new Date("2026-11-25T12:00:00Z");
+    for (let i = 0; i < 1000; i++) {
+      zip.file(`items/f-${i}.txt`, "", { createFolders: false, date });
+    }
+    const archiveSrc = URL.createObjectURL(
+      new Blob([await zip.generateAsync({ type: "arraybuffer", compression: "STORE" })]),
+    );
+    const [{ default: initSqlJs }, { default: wasmUrl }] = await Promise.all([
+      import("sql.js"),
+      import("sql.js/dist/sql-wasm.wasm?url"),
+    ]);
+    const SQL = await initSqlJs({ locateFile: () => wasmUrl });
+    const database = new SQL.Database();
+    database.run(
+      "CREATE TABLE items (id INTEGER); WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 1050) INSERT INTO items SELECT x FROM cnt;",
+    );
+    const sqliteSrc = URL.createObjectURL(new Blob([new Uint8Array(database.export())]));
+    database.close();
+    try {
+      startI18n();
+      await setLanguage("de");
+      {
+        await using screen = await render(
+          <I18nProvider>
+            <BinaryViewer src={archiveSrc} name="bundle.zip" kind="archive" />
+          </I18nProvider>,
+        );
+        await vi.waitFor(() => {
+          expect(screen.container.textContent).toContain("1.000 Einträge");
+          expect(
+            [...screen.container.querySelectorAll("tbody td")].map((cell) =>
+              cell.textContent?.trim(),
+            ),
+          ).toContain("25.11.2026");
+        }, 10_000);
+      }
+      {
+        await using screen = await render(
+          <I18nProvider>
+            <BinaryViewer src={sqliteSrc} name="catalog.sqlite" kind="sqlite" />
+          </I18nProvider>,
+        );
+        await vi.waitFor(() => {
+          expect(screen.container.textContent).toContain("items (1.050 Zeilen)");
+          expect(screen.container.textContent).toContain("1–50 von 1.050");
+          expect(screen.container.textContent).toContain("1.050 Zeilen · 1 Spalte");
+        }, 10_000);
+      }
+    } finally {
+      URL.revokeObjectURL(archiveSrc);
+      URL.revokeObjectURL(sqliteSrc);
+      await setLanguage("en");
+      __resetClientSettingsPersistenceForTests();
+      // Restore the GT fallback locale for tests that render without an I18nProvider.
+      initializeI18n(() => {});
     }
   });
 });

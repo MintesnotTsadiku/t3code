@@ -5,6 +5,7 @@ import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments"
 import { ChevronLeftIcon, ChevronRightIcon, FileIcon, FolderIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useFormattingLocale } from "~/i18n/I18nProvider";
 import { m } from "~/i18n/messages";
 
 import {
@@ -38,20 +39,20 @@ type Archive = Extract<BinaryWorkerResult, { type: "archive" }>;
 type Database = Extract<BinaryWorkerResult, { type: "sqlite" }>;
 type Rows = Extract<BinaryWorkerResult, { type: "rows" }>;
 
-const rowsLabel = (count: number, gt: ReturnType<typeof useGT>) =>
+const rowsLabel = (count: number, gt: ReturnType<typeof useGT>, format: Intl.NumberFormat) =>
   gt("{count, plural, one {{formatted} row} other {{formatted} rows}}", {
     count,
-    formatted: count.toLocaleString(),
+    formatted: format.format(count),
   });
-const columnsLabel = (count: number, gt: ReturnType<typeof useGT>) =>
+const columnsLabel = (count: number, gt: ReturnType<typeof useGT>, format: Intl.NumberFormat) =>
   gt("{count, plural, one {{formatted} column} other {{formatted} columns}}", {
     count,
-    formatted: count.toLocaleString(),
+    formatted: format.format(count),
   });
-const entriesLabel = (count: number, gt: ReturnType<typeof useGT>) =>
+const entriesLabel = (count: number, gt: ReturnType<typeof useGT>, format: Intl.NumberFormat) =>
   gt("{count, plural, one {{formatted} entry} other {{formatted} entries}}", {
     count,
-    formatted: count.toLocaleString(),
+    formatted: format.format(count),
   });
 
 function ArchiveFile(props: { readonly path: string; readonly bytes: Uint8Array<ArrayBuffer> }) {
@@ -104,6 +105,7 @@ export default function BinaryViewer(props: {
 }) {
   const gt = useGT();
   const messages = useMessages();
+  const locale = useFormattingLocale();
   const [sizeBytes, setSizeBytes] = useState<number | null>(null);
   const [archive, setArchive] = useState<Archive | null>(null);
   const [database, setDatabase] = useState<Database | null>(null);
@@ -190,6 +192,7 @@ export default function BinaryViewer(props: {
     };
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- One worker owns this keyed file and its message stream.
   }, [props.src, props.kind, props.name]);
+  const numberFormat = new Intl.NumberFormat(locale);
   const table = database?.tables.find((item) => item.name === selectedTable);
   const selectPage = (next: number, name = selectedTable) => {
     setSelectedTable(name);
@@ -246,7 +249,7 @@ export default function BinaryViewer(props: {
             {selectedPath ?? (folder || gt("Archive contents"))}
           </span>
           <span className="shrink-0 text-muted-foreground">
-            {entriesLabel(archive.entries.length, gt)}
+            {entriesLabel(archive.entries.length, gt, numberFormat)}
             {sizeBytes !== null ? ` · ${formatAttachmentSize(sizeBytes, messages)}` : ""}
           </span>
         </div>
@@ -268,13 +271,13 @@ export default function BinaryViewer(props: {
                   size="xs"
                 >
                   <SelectValue>
-                    {table.name} ({rowsLabel(table.count, gt)})
+                    {table.name} ({rowsLabel(table.count, gt, numberFormat)})
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   {database.tables.map((item) => (
                     <SelectItem key={item.name} value={item.name}>
-                      {item.name} ({rowsLabel(item.count, gt)})
+                      {item.name} ({rowsLabel(item.count, gt, numberFormat)})
                     </SelectItem>
                   ))}
                 </SelectPopup>
@@ -291,9 +294,9 @@ export default function BinaryViewer(props: {
               {table.count === 0
                 ? gt("0 rows")
                 : gt("{start}–{end} of {total}", {
-                    start: String(page * SQLITE_PAGE_SIZE + 1),
-                    end: String(Math.min(table.count, (page + 1) * SQLITE_PAGE_SIZE)),
-                    total: table.count.toLocaleString(),
+                    start: numberFormat.format(page * SQLITE_PAGE_SIZE + 1),
+                    end: numberFormat.format(Math.min(table.count, (page + 1) * SQLITE_PAGE_SIZE)),
+                    total: numberFormat.format(table.count),
                   })}
             </span>
             <FileSurfaceAction
@@ -308,8 +311,8 @@ export default function BinaryViewer(props: {
             className="border-b border-border/60 px-3 py-2 text-xs text-muted-foreground tabular-nums"
             role="status"
           >
-            {rowsLabel(table.count, gt)} ·{" "}
-            {rows ? columnsLabel(rows.columns.length, gt) : gt("… columns")}
+            {rowsLabel(table.count, gt, numberFormat)} ·{" "}
+            {rows ? columnsLabel(rows.columns.length, gt, numberFormat) : gt("… columns")}
             {sizeBytes !== null ? ` · ${formatAttachmentSize(sizeBytes, messages)}` : ""}
           </div>
           <FileSurfaceNotice>
@@ -388,7 +391,7 @@ export default function BinaryViewer(props: {
                     {formatAttachmentSize(item.size, messages)}
                   </td>
                   <td className="w-28 border-b border-border/60 px-3 py-2 text-right whitespace-nowrap text-muted-foreground">
-                    {formatArchiveModifiedDate(item.modified)}
+                    {formatArchiveModifiedDate(item.modified, locale)}
                   </td>
                 </tr>
               ))}
