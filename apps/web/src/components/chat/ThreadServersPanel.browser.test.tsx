@@ -1,6 +1,6 @@
 import { EnvironmentId, ThreadId, type DiscoveredLocalServer } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 const shell = vi.hoisted(() => ({ openExternal: vi.fn(async (_url: string) => undefined) }));
 
@@ -49,7 +49,7 @@ vi.mock(import("../../portDiscoveryState"), async (importOriginal) => ({
     ),
 }));
 
-import { render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import { ThreadServersPanel } from "./ThreadServersPanel";
 
 const panel = (threadId: string) => (
@@ -88,4 +88,18 @@ it("opens a remote server in the system browser through the forward a modified c
   await vi.waitFor(() =>
     expect(shell.openExternal).toHaveBeenCalledWith("http://localhost:45000/"),
   );
+});
+
+it("shares the hover delay between adjacent server rows", async () => {
+  await using screen = await render(panel("hover"));
+  const first = screen.getByRole("button", { name: /^localhost:3000/ });
+  const second = screen.getByRole("button", { name: /^localhost:3001/ });
+  await expect.element(second).toBeVisible();
+  using _timers = fakeTimers();
+  await userEvent.hover(first);
+  await act(() => vi.advanceTimersByTime(200));
+  expect(first.element()).toHaveAttribute("data-popup-open");
+  await userEvent.hover(second);
+  await act(() => vi.advanceTimersByTime(1));
+  expect(second.element()).toHaveAttribute("data-popup-open");
 });

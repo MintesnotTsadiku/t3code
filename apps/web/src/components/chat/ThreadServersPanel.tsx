@@ -41,7 +41,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { openDiscoveredPort } from "../preview/openDiscoveredPort";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -58,7 +58,12 @@ interface ThreadServersPanelProps {
 
 /** Local servers the thread's terminals and agent started. Hidden while none run. */
 export function ThreadServersPanel(props: ThreadServersPanelProps) {
-  return <ThreadServersList key={`${props.environmentId}:${props.threadId}`} {...props} />;
+  return (
+    // Adjacent rows share the hover delay, so the next row's tooltip opens at once.
+    <TooltipProvider>
+      <ThreadServersList key={`${props.environmentId}:${props.threadId}`} {...props} />
+    </TooltipProvider>
+  );
 }
 
 function ThreadServersList(props: ThreadServersPanelProps) {
